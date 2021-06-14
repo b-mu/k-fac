@@ -12,13 +12,13 @@ class ConvNet(nn.Module):
         super(ConvNet, self).__init__()
         self.features = nn.Sequential(
             nn.Conv2d(1, 128, kernel_size=3, stride=1, padding=1),
-            nn.LayerNorm([128, 28, 28]),
+            nn.LayerNorm([28, 28]),
             nn.ReLU(),
             nn.Conv2d(128, 128, kernel_size=3, stride=1, padding=1),
-            nn.LayerNorm([128, 28, 28]),
+            nn.LayerNorm([28, 28]),
             nn.ReLU(),
             nn.Conv2d(128, 128, kernel_size=3, stride=1, padding=1),
-            nn.LayerNorm([128, 28, 28]),
+            nn.LayerNorm([28, 28]),
             nn.ReLU(),
             nn.MaxPool2d(kernel_size=3),
             nn.Flatten(), 
