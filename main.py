@@ -587,7 +587,30 @@ def train(epoch):
                                 gv = gv / n
                                 update = (grad - gv)/damp
                                 m.weight.grad.copy_(update)
-                        
+                        elif isinstance(m, nn.LayerNorm):
+                            I, G = m.I, m.G
+                            mean = I.mean(dim=-1).unsqueeze(-1)
+                            var = I.var(dim=-1, unbiased=False).unsqueeze(-1)
+                            x_hat = (I - mean) / (var + m.eps).sqrt()
+
+                            if len(I.shape) == 2:
+                              J = G * x_hat
+                            else:
+                              J = torch.einsum('ncf,ncf->nf', G, x_hat)
+                            J = J.reshape(J.shape[0], -1)
+                            JJT = torch.matmul(J, J.t())
+
+                            grad_prod = torch.matmul(J, grad.reshape(-1))
+
+                            NGD_kernel = JJT / n
+                            NGD_inv = torch.linalg.inv(NGD_kernel + damp * torch.eye(n).to(grad.device))
+                            v = torch.matmul(NGD_inv, grad_prod)
+
+                            gv = torch.matmul(J.t(), v) / n
+
+                            update = (grad.reshape(-1) - gv) / damp
+                            update = update.reshape(m.weight.grad.shape)
+                            m.weight.grad.copy_(update)
                         
 
                 # last part of SMW formula
