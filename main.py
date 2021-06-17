@@ -728,6 +728,24 @@ def train(epoch):
                 np.save(f, ((torch.eye(JTDJ.size(0)).to(JTDJ.device) - JTDJ) / damping).cpu().numpy())
                 count += 1
 
+          elif m.__class__.__name__ == 'LayerNorm':
+            with torch.no_grad():
+              I, G = m.I, m.G
+              if len(I.shape) == 2:
+                mean = I.mean(dim=-1).unsqueeze(-1)
+                var = I.var(dim=-1, unbiased=False).unsqueeze(-1)
+              else:
+                mean = I.mean((-2, -1), keepdims=True)
+                var = I.var((-2, -1), unbiased=False, keepdims=True)
+              x_hat = (I - mean) / (var + m.eps).sqrt()
+
+              J = G * x_hat
+              J = J.reshape(J.shape[0], -1)
+              JTDJ = torch.matmul(J.t(), torch.matmul(m.NGD_inv, J)) / args.batch_size
+
+              with open('ngd/' + str(epoch) + '_m_' + str(count) + '_inv.npy', 'wb') as f:
+                np.save(f, ((torch.eye(JTDJ.size(0)).to(JTDJ.device) - JTDJ) / damping).cpu().numpy())
+                count += 1
       elif optim_name == 'exact_ngd':
         for m in all_modules:
           if m.__class__.__name__ in ['Conv2d', 'Linear']:
