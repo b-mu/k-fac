@@ -14,7 +14,7 @@ from utils.data_utils import get_dataloader
 from torchsummary import summary
 
 from backpack import backpack, extend
-from backpack.extensions import FisherBlock, FisherBlockEff, BatchGrad
+from backpack.extensions import FisherBlock, FisherBlockEff, BatchGrad, FusedFisherBlock
 from backpack.utils.conv import unfold_func
 import math
 import time
@@ -209,6 +209,10 @@ elif optim_name == 'ngd':
                 buf[name] = torch.zeros_like(param.data).to(args.device) 
     if args.save_inv == 'true':
       os.mkdir('ngd')
+elif optim_name == 'fused_ngd':
+    print('Fused NGD optimizer selected.')
+    optimizer = optim.SGD(net.parameters(),
+                          lr=args.learning_rate)
 
 elif optim_name == 'exact_ngd':
     print('Exact NGD optimizer selected.')
@@ -299,6 +303,10 @@ if optim_name == 'ngd':
     extend(criterion)
     extend(criterion_none)
     # print(net.state_dict())
+elif optim_name == 'fused_ngd':
+    extend(net)
+    extend(criterion)
+    extend(criterion_none)
 elif optim_name == 'exact_ngd':
     extend(net)
     extend(criterion)
@@ -657,6 +665,198 @@ def train(epoch):
                     # print('d_p:', d_p.shape)
                     # print(d_p)
 
+        elif optim_name == 'fused_ngd':
+            if batch_idx % args.freq == 0:
+                store_io_(True)
+                inputs, targets = inputs.to(args.device), targets.to(args.device)
+                optimizer.zero_grad()
+                # net.set_require_grad(True)
+
+                outputs = net(inputs)
+                # loss = criterion(outputs, targets)
+                # loss.backward(retain_graph=True)
+
+                # # storing original gradient for later use
+                # grad_org = []
+                # # grad_dict = {}
+                # for name, param in net.named_parameters():
+                #     grad_org.append(param.grad.reshape(1, -1))
+                # #     grad_dict[name] = param.grad.clone()
+                # grad_org = torch.cat(grad_org, 1)
+
+                ###### now we have to compute the true fisher
+                with torch.no_grad():
+                # gg = torch.nn.functional.softmax(outputs, dim=1)
+                    sampled_y = torch.multinomial(torch.nn.functional.softmax(outputs, dim=1),1).squeeze().to(args.device)
+                    update_list, loss = optimal_JJT_fused(outputs, targets, sampled_y, args.batch_size, damping=damping)
+                
+                # if args.trial == 'true':
+                #     update_list, loss = optimal_JJT_v2(outputs, sampled_y, args.batch_size, damping=damp, alpha=0.95, low_rank=args.low_rank, gamma=args.gamma, memory_efficient=args.memory_efficient, super_opt=args.super_opt)
+                # else:
+                #     update_list, loss = optimal_JJT(outputs, sampled_y, args.batch_size, damping=damp, alpha=0.95, low_rank=args.low_rank, gamma=args.gamma, memory_efficient=args.memory_efficient)
+
+                # optimizer.zero_grad()
+                # update_list, loss = optimal_JJT_fused(outputs, sampled_y, args.batch_size, damping=damp)
+
+                # optimizer.zero_grad()
+   
+                # last part of SMW formula
+                # grad_new = []
+                for name, param in net.named_parameters():
+                    param.grad.copy_(update_list[name])
+                #     grad_new.append(param.grad.reshape(1, -1))
+                # grad_new = torch.cat(grad_new, 1)   
+                # grad_new = grad_org
+                store_io_(False)
+            else:
+                inputs, targets = inputs.to(args.device), targets.to(args.device)
+                optimizer.zero_grad()
+                # net.set_require_grad(True)
+
+                outputs = net(inputs)
+                loss = criterion(outputs, targets)
+                loss.backward()
+
+                # storing original gradient for later use
+                # grad_org = []
+                # # grad_dict = {}
+                # for name, param in net.named_parameters():
+                #     grad_org.append(param.grad.reshape(1, -1))
+                # #     grad_dict[name] = param.grad.clone()
+                # grad_org = torch.cat(grad_org, 1)
+
+                ###### now we have to compute the true fisher
+                # with torch.no_grad():
+                # gg = torch.nn.functional.softmax(outputs, dim=1)
+                    # sampled_y = torch.multinomial(torch.nn.functional.softmax(outputs, dim=1),1).squeeze().to(args.device)
+                # all_modules = net.modules()
+
+                for m in net.modules():
+                    if hasattr(m, "NGD_inv"):                    
+                        grad = m.weight.grad
+                        if isinstance(m, nn.Linear):
+                            I = m.I
+                            G = m.G
+                            n = I.shape[0]
+                            NGD_inv = m.NGD_inv
+                            grad_prod = einsum("ni,oi->no", (I, grad))
+                            grad_prod = einsum("no,no->n", (grad_prod, G))
+                            v = matmul(NGD_inv, grad_prod.unsqueeze(1)).squeeze()
+                            gv = einsum("n,no->no", (v, G))
+                            gv = einsum("no,ni->oi", (gv, I))
+                            gv = gv / n
+                            update = (grad - gv)/damp
+                            m.weight.grad.copy_(update)
+                        elif isinstance(m, nn.Conv2d):
+                            if hasattr(m, "AX"):
+
+                                if args.low_rank.lower() == 'true':
+                                    ###### using low rank structure
+                                    U = m.U
+                                    S = m.S
+                                    V = m.V
+                                    NGD_inv = m.NGD_inv
+                                    n = NGD_inv.shape[0]
+
+                                    grad_reshape = grad.reshape(grad.shape[0], -1)
+                                    grad_prod = V @ grad_reshape.t().reshape(-1, 1)
+                                    grad_prod = torch.diag(S) @ grad_prod
+                                    grad_prod = U @ grad_prod
+                                    
+                                    grad_prod = grad_prod.squeeze()
+                                    v = matmul(NGD_inv, grad_prod.unsqueeze(1)).squeeze()
+                                    gv = U.t() @ v.unsqueeze(1)
+                                    gv = torch.diag(S) @ gv
+                                    gv = V.t() @ gv
+
+                                    gv = gv.reshape(grad_reshape.shape[1], grad_reshape.shape[0]).t()
+                                    gv = gv.view_as(grad)
+                                    gv = gv / n
+                                    update = (grad - gv)/damp
+                                    m.weight.grad.copy_(update)
+                                else:
+                                    AX = m.AX
+                                    NGD_inv = m.NGD_inv
+                                    n = AX.shape[0]
+
+                                    grad_reshape = grad.reshape(grad.shape[0], -1)
+                                    grad_prod = einsum("nkm,mk->n", (AX, grad_reshape))
+                                    v = matmul(NGD_inv, grad_prod.unsqueeze(1)).squeeze()
+                                    gv = einsum("nkm,n->mk", (AX, v))
+                                    gv = gv.view_as(grad)
+                                    gv = gv / n
+                                    update = (grad - gv)/damp
+                                    m.weight.grad.copy_(update)
+                            elif hasattr(m, "I"):
+                                I = m.I
+                                if args.memory_efficient == 'true':
+                                    I = unfold_func(m)(I)
+                                G = m.G
+                                n = I.shape[0]
+                                NGD_inv = m.NGD_inv
+                                grad_reshape = grad.reshape(grad.shape[0], -1)
+                                x1 = einsum("nkl,mk->nml", (I, grad_reshape))
+                                grad_prod = einsum("nml,nml->n", (x1, G))
+                                v = matmul(NGD_inv, grad_prod.unsqueeze(1)).squeeze()
+                                gv = einsum("n,nml->nml", (v, G))
+                                gv = einsum("nml,nkl->mk", (gv, I))
+                                gv = gv.view_as(grad)
+                                gv = gv / n
+                                update = (grad - gv)/damp
+                                m.weight.grad.copy_(update)
+                        elif isinstance(m, nn.BatchNorm2d) or isinstance(m, nn.BatchNorm1d):
+                            if args.batchnorm == 'true':
+                                dw = m.dw
+                                n = dw.shape[0]
+                                NGD_inv = m.NGD_inv
+                                grad_prod = einsum("ni,i->n", (dw, grad))
+
+                                v = matmul(NGD_inv, grad_prod.unsqueeze(1)).squeeze()
+                                gv = einsum("n,ni->i", (v, dw))
+                                
+                                gv = gv / n
+                                update = (grad - gv)/damp
+                                m.weight.grad.copy_(update)
+                        
+                        
+
+                # last part of SMW formula
+                # grad_new = []
+                # for name, param in net.named_parameters():
+                #     grad_new.append(param.grad.reshape(1, -1))
+                # grad_new = torch.cat(grad_new, 1)   
+                # grad_new = grad_org
+
+
+            ##### do kl clip
+            lr = lr_scheduler.get_last_lr()[0]
+            # vg_sum = 0
+            # vg_sum += (grad_new * grad_org ).sum()
+            # vg_sum = vg_sum * (lr ** 2)
+            # nu = min(1.0, math.sqrt(args.kl_clip / vg_sum))
+            # for name, param in net.named_parameters():
+            #     param.grad.mul_(nu)
+
+            # optimizer.step()
+            # manual optimizing:
+            with torch.no_grad():
+                for name, param in net.named_parameters():
+                    d_p = param.grad.data
+                    # print('=== step ===')
+
+                    # apply momentum
+                    # if args.momentum != 0:
+                    #     buf[name].mul_(args.momentum).add_(d_p)
+                    #     d_p.copy_(buf[name])
+
+                    # apply weight decay
+                    if args.weight_decay != 0:
+                        d_p.add_(args.weight_decay, param.data)
+
+                    lr = lr_scheduler.get_last_lr()[0]
+                    param.data.add_(-lr, d_p)
+                    # print('d_p:', d_p.shape)
+                    # print(d_p)
 
 
         train_loss += loss.item()
@@ -817,6 +1017,20 @@ def optimal_JJT_v2(outputs, targets, batch_size, damping=1.0, alpha=0.95, low_ra
         else:
             update_list[name] = param.grad.data
 
+    return update_list, loss
+
+def optimal_JJT_fused(outputs, targets, sampled_y, batch_size, damping=1.0):
+    update_list = {}
+    loss_sample = criterion(outputs, sampled_y)
+    loss = 0
+    with backpack(FusedFisherBlock(loss_sample, damping)):
+      loss = criterion(outputs, targets)
+      loss.backward()
+    for name, param in net.named_parameters():
+      if hasattr(param, "fused_fisher_block"):
+        update_list[name] = param.fused_fisher_block
+      else:
+        update_list[name] = param.grad.data
     return update_list, loss
 
 def main():
