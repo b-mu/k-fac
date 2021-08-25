@@ -685,10 +685,10 @@ def train(epoch):
                 # grad_org = torch.cat(grad_org, 1)
 
                 ###### now we have to compute the true fisher
-                with torch.no_grad():
+                # with torch.no_grad():
                 # gg = torch.nn.functional.softmax(outputs, dim=1)
-                    sampled_y = torch.multinomial(torch.nn.functional.softmax(outputs, dim=1),1).squeeze().to(args.device)
-                    update_list, loss = optimal_JJT_fused(outputs, targets, sampled_y, args.batch_size, damping=damping)
+                  # sampled_y = torch.multinomial(torch.nn.functional.softmax(outputs, dim=1),1).squeeze().to(args.device)
+                update_list, loss = optimal_JJT_fused(outputs, targets, args.batch_size, damping=damping)
                 
                 # if args.trial == 'true':
                 #     update_list, loss = optimal_JJT_v2(outputs, sampled_y, args.batch_size, damping=damp, alpha=0.95, low_rank=args.low_rank, gamma=args.gamma, memory_efficient=args.memory_efficient, super_opt=args.super_opt)
@@ -703,6 +703,7 @@ def train(epoch):
                 # last part of SMW formula
                 # grad_new = []
                 for name, param in net.named_parameters():
+                    # TODO(bmu): avoid duplicate copying of batch norm
                     param.grad.copy_(update_list[name])
                 #     grad_new.append(param.grad.reshape(1, -1))
                 # grad_new = torch.cat(grad_new, 1)   
@@ -1019,11 +1020,10 @@ def optimal_JJT_v2(outputs, targets, batch_size, damping=1.0, alpha=0.95, low_ra
 
     return update_list, loss
 
-def optimal_JJT_fused(outputs, targets, sampled_y, batch_size, damping=1.0):
+def optimal_JJT_fused(outputs, targets, batch_size, damping=1.0):
     update_list = {}
-    loss_sample = criterion(outputs, sampled_y)
     loss = 0
-    with backpack(FusedFisherBlock(loss_sample, damping)):
+    with backpack(FusedFisherBlock(damping)):
       loss = criterion(outputs, targets)
       loss.backward()
     for name, param in net.named_parameters():
