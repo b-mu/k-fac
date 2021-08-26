@@ -668,85 +668,41 @@ def train(epoch):
         elif optim_name == 'fused_ngd':
             if batch_idx % args.freq == 0:
                 store_io_(True)
+
                 inputs, targets = inputs.to(args.device), targets.to(args.device)
-                optimizer.zero_grad()
-                # net.set_require_grad(True)
-
                 outputs = net(inputs)
-                # loss = criterion(outputs, targets)
-                # loss.backward(retain_graph=True)
 
-                # # storing original gradient for later use
-                # grad_org = []
-                # # grad_dict = {}
-                # for name, param in net.named_parameters():
-                #     grad_org.append(param.grad.reshape(1, -1))
-                # #     grad_dict[name] = param.grad.clone()
-                # grad_org = torch.cat(grad_org, 1)
-
-                ###### now we have to compute the true fisher
-                # with torch.no_grad():
-                # gg = torch.nn.functional.softmax(outputs, dim=1)
-                  # sampled_y = torch.multinomial(torch.nn.functional.softmax(outputs, dim=1),1).squeeze().to(args.device)
+                # fused backward pass, compute true fisher with MC sampling inside FusedFisherBlock BACKPACK extension
+                optimizer.zero_grad()
                 update_list, loss = optimal_JJT_fused(outputs, targets, args.batch_size, damping=damping)
                 
-                # if args.trial == 'true':
-                #     update_list, loss = optimal_JJT_v2(outputs, sampled_y, args.batch_size, damping=damp, alpha=0.95, low_rank=args.low_rank, gamma=args.gamma, memory_efficient=args.memory_efficient, super_opt=args.super_opt)
-                # else:
-                #     update_list, loss = optimal_JJT(outputs, sampled_y, args.batch_size, damping=damp, alpha=0.95, low_rank=args.low_rank, gamma=args.gamma, memory_efficient=args.memory_efficient)
-
-                # optimizer.zero_grad()
-                # update_list, loss = optimal_JJT_fused(outputs, sampled_y, args.batch_size, damping=damp)
-
-                # optimizer.zero_grad()
-   
-                # last part of SMW formula
-                # grad_new = []
                 for name, param in net.named_parameters():
                     # TODO(bmu): avoid duplicate copying of batch norm
                     param.grad.copy_(update_list[name])
-                #     grad_new.append(param.grad.reshape(1, -1))
-                # grad_new = torch.cat(grad_new, 1)   
-                # grad_new = grad_org
+
                 store_io_(False)
             else:
                 inputs, targets = inputs.to(args.device), targets.to(args.device)
-                optimizer.zero_grad()
-                # net.set_require_grad(True)
-
                 outputs = net(inputs)
-                loss = criterion(outputs, targets)
+
+                optimizer.zero_grad()
+                loss = criterion(outputs, targets)                
                 loss.backward()
 
-                # storing original gradient for later use
-                # grad_org = []
-                # # grad_dict = {}
-                # for name, param in net.named_parameters():
-                #     grad_org.append(param.grad.reshape(1, -1))
-                # #     grad_dict[name] = param.grad.clone()
-                # grad_org = torch.cat(grad_org, 1)
-
-                ###### now we have to compute the true fisher
-                # with torch.no_grad():
-                # gg = torch.nn.functional.softmax(outputs, dim=1)
-                    # sampled_y = torch.multinomial(torch.nn.functional.softmax(outputs, dim=1),1).squeeze().to(args.device)
-                # all_modules = net.modules()
-
                 for m in net.modules():
-                    if hasattr(m, "NGD_inv"):                    
-                        grad = m.weight.grad
+                    if hasattr(m, "NGD_inv"):
+                        g = m.weight.grad
                         if isinstance(m, nn.Linear):
                             I = m.I
                             G = m.G
-                            n = I.shape[0]
-                            NGD_inv = m.NGD_inv
-                            grad_prod = einsum("ni,oi->no", (I, grad))
-                            grad_prod = einsum("no,no->n", (grad_prod, G))
-                            v = matmul(NGD_inv, grad_prod.unsqueeze(1)).squeeze()
-                            gv = einsum("n,no->no", (v, G))
-                            gv = einsum("no,ni->oi", (gv, I))
-                            gv = gv / n
-                            update = (grad - gv)/damp
+                            JJT_inv = m.NGD_inv
+                            Jg = einsum("mi,oi->mo", (I, g))
+                            Jg = einsum("mo,mo->m", (Jg, G))
+                            v = matmul(JJT_inv, Jg.unsqueeze(1)).squeeze()
+                            Jv = einsum("n,no->no", (v, G))
+                            Jv = einsum("no,ni->oi", (Jv, I))
+
+                            update = (g - Jv) / damping
                             m.weight.grad.copy_(update)
                         elif isinstance(m, nn.Conv2d):
                             if hasattr(m, "AX"):
@@ -773,7 +729,7 @@ def train(epoch):
                                     gv = gv.reshape(grad_reshape.shape[1], grad_reshape.shape[0]).t()
                                     gv = gv.view_as(grad)
                                     gv = gv / n
-                                    update = (grad - gv)/damp
+                                    update = (grad - gv)/damping
                                     m.weight.grad.copy_(update)
                                 else:
                                     AX = m.AX
@@ -786,7 +742,7 @@ def train(epoch):
                                     gv = einsum("nkm,n->mk", (AX, v))
                                     gv = gv.view_as(grad)
                                     gv = gv / n
-                                    update = (grad - gv)/damp
+                                    update = (grad - gv)/damping
                                     m.weight.grad.copy_(update)
                             elif hasattr(m, "I"):
                                 I = m.I
@@ -803,7 +759,7 @@ def train(epoch):
                                 gv = einsum("nml,nkl->mk", (gv, I))
                                 gv = gv.view_as(grad)
                                 gv = gv / n
-                                update = (grad - gv)/damp
+                                update = (grad - gv)/damping
                                 m.weight.grad.copy_(update)
                         elif isinstance(m, nn.BatchNorm2d) or isinstance(m, nn.BatchNorm1d):
                             if args.batchnorm == 'true':
@@ -816,18 +772,8 @@ def train(epoch):
                                 gv = einsum("n,ni->i", (v, dw))
                                 
                                 gv = gv / n
-                                update = (grad - gv)/damp
+                                update = (grad - gv)/damping
                                 m.weight.grad.copy_(update)
-                        
-                        
-
-                # last part of SMW formula
-                # grad_new = []
-                # for name, param in net.named_parameters():
-                #     grad_new.append(param.grad.reshape(1, -1))
-                # grad_new = torch.cat(grad_new, 1)   
-                # grad_new = grad_org
-
 
             ##### do kl clip
             lr = lr_scheduler.get_last_lr()[0]
@@ -843,7 +789,6 @@ def train(epoch):
             with torch.no_grad():
                 for name, param in net.named_parameters():
                     d_p = param.grad.data
-                    # print('=== step ===')
 
                     # apply momentum
                     # if args.momentum != 0:
@@ -856,8 +801,6 @@ def train(epoch):
 
                     lr = lr_scheduler.get_last_lr()[0]
                     param.data.add_(-lr, d_p)
-                    # print('d_p:', d_p.shape)
-                    # print(d_p)
 
 
         train_loss += loss.item()
