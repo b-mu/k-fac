@@ -696,13 +696,30 @@ def train(epoch):
                             I = m.I
                             G = m.G
                             JJT_inv = m.NGD_inv
-                            Jg = einsum("mi,oi->mo", (I, g))
-                            Jg = einsum("mo,mo->m", (Jg, G))
-                            v = matmul(JJT_inv, Jg.unsqueeze(1)).squeeze()
-                            Jv = einsum("n,no->no", (v, G))
-                            Jv = einsum("no,ni->oi", (Jv, I))
 
-                            update = (g - Jv) / damping
+                            # --- I: mc_samples = 1 ---
+                            # Jg = einsum("mi,oi->mo", (I, g))
+                            # Jg = einsum("mo,mo->m", (Jg, G))
+                            # v = matmul(JJT_inv, Jg.unsqueeze(1)).squeeze()
+                            # Jv = einsum("n,no->no", (v, G))
+                            # Jv = einsum("no,ni->oi", (Jv, I))
+
+                            # update = (g - Jv) / damping
+
+                            # --- II: exact hessian of loss w.r.t network outputs ---
+                            c, l, o = G.size()
+                            g = g.t()
+
+                            Jg = einsum("mi,io->mo", (I, g))
+                            Jg = einsum("mo,cmo->cm", (Jg, G))
+                            Jg = Jg.reshape(-1)
+                            v = matmul(JJT_inv, Jg.unsqueeze(1)).squeeze()
+                            gv = einsum("q,qo->qo", (v, G.reshape(c * l, o)))
+                            gv = gv.reshape(c, l, o)
+                            gv = einsum("cmo,mi->oi", (gv, I))
+
+                            update = (g.t() - gv) / damping
+
                             m.weight.grad.copy_(update)
                         elif isinstance(m, nn.Conv2d):
                             if hasattr(m, "AX"):
