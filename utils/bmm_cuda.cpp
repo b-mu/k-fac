@@ -130,13 +130,15 @@ public:
   }
   };
 
-  void launch_kernel(int n, int m, int k, float* B, float* A, float* C, cudaStream_t stream, cublasHandle_t handle)
+  void launch_kernel(int n, int m, int k, float* B, float* A, float* C, cudaStream_t stream, cublasHandle_t handle, bool A_T, bool B_T)
 {
 
   cublasSetStream(handle,stream);
   float alpha=1.0f;
   float beta=0.0f;
-  cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, &alpha, B, n, A, k, &beta, C, n);
+  auto transa = A_T ? CUBLAS_OP_T : CUBLAS_OP_N;
+  auto transb = B_T ? CUBLAS_OP_T : CUBLAS_OP_N;
+  cublasSgemm(handle, transa, transb, n, m, k, &alpha, B, n, A, k, &beta, C, n);
 
 };
 
@@ -150,7 +152,9 @@ public:
     std::vector<int> m, std::vector<int> n, std::vector<int> k, int batchCount,
     std::vector<int> offset_A,
     std::vector<int> offset_B,
-    std::vector<int> offset_C
+    std::vector<int> offset_C,
+    bool A_T=false,
+    bool B_T=false
     ) {
 
 
@@ -158,7 +162,7 @@ public:
 #pragma omp for
 for(int i=0; i<batchCount; i++){
 
-   launch_kernel(n[i], m[i], k[i],  (float *) (B.data_ptr() )+ offset_B[i], (float *) (A.data_ptr() )+ offset_A[i], (float *) (C.data_ptr() )+ offset_C[i], streams[i], handles[i]);
+   launch_kernel(n[i], m[i], k[i],  (float *) (B.data_ptr() )+ offset_B[i], (float *) (A.data_ptr() )+ offset_A[i], (float *) (C.data_ptr() )+ offset_C[i], streams[i], handles[i], A_T, B_T);
 
 }
 };
