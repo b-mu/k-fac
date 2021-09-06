@@ -138,7 +138,9 @@ public:
   float beta=0.0f;
   auto transa = A_T ? CUBLAS_OP_T : CUBLAS_OP_N;
   auto transb = B_T ? CUBLAS_OP_T : CUBLAS_OP_N;
-  cublasSgemm(handle, transa, transb, n, m, k, &alpha, B, n, A, k, &beta, C, n);
+  auto lda = A_T ? k : n;
+  auto ldb = B_T ? m : k;
+  cublasSgemm(handle, transa, transb, n, m, k, &alpha, B, lda, A, ldb, &beta, C, n);
 
 };
 
