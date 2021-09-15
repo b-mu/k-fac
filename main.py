@@ -236,17 +236,11 @@ elif optim_name == 'kngd':
 elif optim_name == 'nystrom':
     print('Nystrom optimizer selected')
     optimizer = NystromOptimizer(net,
-                                lr=args.learning_rate,
-                                momentum=args.momentum,
-                                damping=args.damping,
-                                kl_clip=args.kl_clip,
-                                weight_decay=args.weight_decay,
-                                freq=args.freq,
-                                gamma=args.gamma,
-                                low_rank=args.low_rank,
-                                super_opt=args.super_opt,
-                                reduce_sum=args.reduce_sum,
-                                diag=args.diag)
+                                 lr=args.learning_rate,
+                                 momentum=args.momentum,
+                                 damping=args.damping,
+                                 weight_decay=args.weight_decay,
+                                 freq=args.freq)
 
 elif optim_name == 'ngd_stream':
     # SAEED: TODO fix batchnorm or remove it totally
