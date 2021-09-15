@@ -86,7 +86,7 @@ class NystromOptimizer(optim.Optimizer):
         classname = m.__class__.__name__.lower()
         # print('=== _update_inv ===')
         if classname == 'linear':
-            assert(m.optimized == True)
+            # assert(m.optimized == True)
             I = self.m_I[m][1]
             # print('I:', I.shape)
             G = self.m_G[m][1]
@@ -128,76 +128,101 @@ class NystromOptimizer(optim.Optimizer):
             # self.m_G[m] = (None, self.m_G[m][1])
             # torch.cuda.empty_cache()
         elif classname == 'conv2d':
+            # assert(m.optimized == True)
+            I = self.m_I[m][1]
+            # print('I:', I.shape)
+            G = self.m_G[m][1]
+            # print('G:', G.shape)
+            n = I.shape[0]
+            J = einsum('ni,no->nio', (I, G)).reshape(n, -1)
+            # print('J:', J.shape)
+            p = einsum('np->p', J * J)
+            # print('p:', p.shape)
+            p_ = p / torch.sum(p)
+            i = torch.multinomial(p_, num_samples=1)
+            # print('i:', i)
+            Ji = J[:,i].reshape(-1)
+            # print('Ji:', Ji.shape)
+            C = einsum('n,np->np', Ji, J)
+            # print('c:', C.shape)
+            C = einsum('np->p', C)
+            # print('C:', C.shape)
+            w = p[i]
+            # print('w:', w)
+            s = math.sqrt(1 / (torch.dot(C, C) + self.damping * w))
+            # print('s:', s)
+            self.m_C[m] = C * s
+
             # SAEED: @TODO: we don't need II and GG after computations, clear the memory
-            if m.optimized == True:
-                # print('=== optimized ===')
-                II = self.m_I[m][0]
-                GG = self.m_G[m][0]
-                n = II.shape[0]
+            # if m.optimized == True:
+            #     # print('=== optimized ===')
+            #     II = self.m_I[m][0]
+            #     GG = self.m_G[m][0]
+            #     n = II.shape[0]
 
-                NGD_kernel = None
-                if self.reduce_sum == 'true':
-                    if self.diag == 'true':
-                        NGD_kernel = (II * GG / n)
-                        NGD_inv = torch.reciprocal(NGD_kernel + self.damping)
-                    else:
-                        NGD_kernel = II * GG / n
-                        NGD_inv = inv(NGD_kernel + self.damping * eye(n).to(II.device))
-                else:
-                    NGD_kernel = (einsum('nqlp->nq', II * GG)) / n
-                    NGD_inv = inv(NGD_kernel + self.damping * eye(n).to(II.device))
+            #     NGD_kernel = None
+            #     if self.reduce_sum == 'true':
+            #         if self.diag == 'true':
+            #             NGD_kernel = (II * GG / n)
+            #             NGD_inv = torch.reciprocal(NGD_kernel + self.damping)
+            #         else:
+            #             NGD_kernel = II * GG / n
+            #             NGD_inv = inv(NGD_kernel + self.damping * eye(n).to(II.device))
+            #     else:
+            #         NGD_kernel = (einsum('nqlp->nq', II * GG)) / n
+            #         NGD_inv = inv(NGD_kernel + self.damping * eye(n).to(II.device))
 
-                self.m_NGD_Kernel[m] = NGD_inv
+            #     self.m_NGD_Kernel[m] = NGD_inv
 
-                self.m_I[m] = (None, self.m_I[m][1])
-                self.m_G[m] = (None, self.m_G[m][1])
-                torch.cuda.empty_cache()
-            else:
-                # SAEED: @TODO memory cleanup
-                I = self.m_I[m][1]
-                G = self.m_G[m][1]
-                n = I.shape[0]
-                AX = einsum("nkl,nml->nkm", (I, G))
+            #     self.m_I[m] = (None, self.m_I[m][1])
+            #     self.m_G[m] = (None, self.m_G[m][1])
+            #     torch.cuda.empty_cache()
+            # else:
+            #     # SAEED: @TODO memory cleanup
+            #     I = self.m_I[m][1]
+            #     G = self.m_G[m][1]
+            #     n = I.shape[0]
+            #     AX = einsum("nkl,nml->nkm", (I, G))
 
-                del I
-                del G
+            #     del I
+            #     del G
 
-                AX_ = AX.reshape(n , -1)
-                out = matmul(AX_, AX_.t())
+            #     AX_ = AX.reshape(n , -1)
+            #     out = matmul(AX_, AX_.t())
 
-                del AX
+            #     del AX
 
-                NGD_kernel = out / n
-                ### low-rank approximation of Jacobian
-                if self.low_rank == 'true':
-                    # print('=== low rank ===')
-                    V, S, U = svd(AX_.T, full_matrices=False)
-                    U = U.t()
-                    V = V.t()
-                    cs = cumsum(S, dim = 0)
-                    sum_s = sum(S)
-                    index = ((cs - self.gamma * sum_s) <= 0).sum()
-                    U = U[:, 0:index]
-                    S = S[0:index]
-                    V = V[0:index, :]
-                    self.m_UV[m] = U, S, V
+            #     NGD_kernel = out / n
+            #     ### low-rank approximation of Jacobian
+            #     if self.low_rank == 'true':
+            #         # print('=== low rank ===')
+            #         V, S, U = svd(AX_.T, full_matrices=False)
+            #         U = U.t()
+            #         V = V.t()
+            #         cs = cumsum(S, dim = 0)
+            #         sum_s = sum(S)
+            #         index = ((cs - self.gamma * sum_s) <= 0).sum()
+            #         U = U[:, 0:index]
+            #         S = S[0:index]
+            #         V = V[0:index, :]
+            #         self.m_UV[m] = U, S, V
 
-                del AX_
+            #     del AX_
 
-                NGD_inv = inv(NGD_kernel + self.damping * eye(n).to(NGD_kernel.device))
-                self.m_NGD_Kernel[m] = NGD_inv
+            #     NGD_inv = inv(NGD_kernel + self.damping * eye(n).to(NGD_kernel.device))
+            #     self.m_NGD_Kernel[m] = NGD_inv
 
-                del NGD_inv
-                self.m_I[m] = None, self.m_I[m][1]
-                self.m_G[m] = None, self.m_G[m][1]
-                torch.cuda.empty_cache()
+            #     del NGD_inv
+            #     self.m_I[m] = None, self.m_I[m][1]
+            #     self.m_G[m] = None, self.m_G[m][1]
+            #     torch.cuda.empty_cache()
 
     def _get_natural_grad(self, m, damping):
         grad = m.weight.grad.data
         classname = m.__class__.__name__.lower()
 
         if classname == 'linear':
-            assert(m.optimized == True)
+            # assert(m.optimized == True)
             I = self.m_I[m][1]
             G = self.m_G[m][1]
             n = I.shape[0]
@@ -239,7 +264,21 @@ class NystromOptimizer(optim.Optimizer):
             # updates = (grad - gv)/damping, bias_update
 
         elif classname == 'conv2d':
-            raise NotImplementedError
+            I = self.m_I[m][1]
+            G = self.m_G[m][1]
+            n = I.shape[0]
+
+            # print('grad:', grad.shape)
+            g = grad.reshape(-1)
+            # print('g:', g.shape)
+            C = self.m_C[m]
+            # print('C:', C.shape)
+            v = torch.dot(C, g) * C
+            # print('v:', v.shape)
+            v = v.view_as(grad)
+            # print('v.view:', v.shape)
+
+            updates = (grad - v) / damping, None
             # grad_reshape = grad.reshape(grad.shape[0], -1)
             # if m.optimized == True:
             #     # print('=== optimized ===')
