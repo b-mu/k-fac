@@ -1,7 +1,7 @@
 '''Train CIFAR10/CIFAR100 with PyTorch.'''
 import argparse
 import os
-from optimizers import (KFACOptimizer, SKFACOptimizer, EKFACOptimizer, KBFGSOptimizer, KBFGSLOptimizer, KBFGSL2LOOPOptimizer, KBFGSLMEOptimizer, NGDOptimizer, NGDStreamOptimizer)
+from optimizers import (KFACOptimizer, SKFACOptimizer, EKFACOptimizer, KBFGSOptimizer, KBFGSLOptimizer, KBFGSL2LOOPOptimizer, KBFGSLMEOptimizer, NGDOptimizer, NGDStreamOptimizer, NystromOptimizer)
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -232,6 +232,21 @@ elif optim_name == 'kngd':
                               super_opt=args.super_opt,
                               reduce_sum=args.reduce_sum,
                               diag=args.diag)
+
+elif optim_name == 'nystrom':
+    print('Nystrom optimizer selected')
+    optimizer = NystromOptimizer(net,
+                                lr=args.learning_rate,
+                                momentum=args.momentum,
+                                damping=args.damping,
+                                kl_clip=args.kl_clip,
+                                weight_decay=args.weight_decay,
+                                freq=args.freq,
+                                gamma=args.gamma,
+                                low_rank=args.low_rank,
+                                super_opt=args.super_opt,
+                                reduce_sum=args.reduce_sum,
+                                diag=args.diag)
 
 elif optim_name == 'ngd_stream':
     # SAEED: TODO fix batchnorm or remove it totally
@@ -470,7 +485,7 @@ def train(epoch):
             optimizer.step()
 
         ### new optimizer test
-        elif optim_name in ['kngd', 'ngd_stream'] :
+        elif optim_name in ['kngd', 'ngd_stream', 'nystrom'] :
             inputs, targets = inputs.to(args.device), targets.to(args.device)
             optimizer.zero_grad()
             outputs = net(inputs)
