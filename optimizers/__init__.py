@@ -7,6 +7,7 @@ from .kbfgsl_2loop import KBFGSL2LOOPOptimizer
 from .kbfgsl_mem_eff import KBFGSLMEOptimizer
 from .ngd import NGDOptimizer
 from .ngd_stream import NGDStreamOptimizer
+from .nystrom import NystromOptimizer
 
 
 def get_optimizer(name):
@@ -28,5 +29,7 @@ def get_optimizer(name):
         return NGDOptimizer
     elif name == 'ngd_stream':
         return NGDStreamOptimizer
+    elif name == 'nystrom':
+        return NystromOptimizer
     else:
         raise NotImplementedError
