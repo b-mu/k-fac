@@ -341,20 +341,20 @@ class NGDOptimizer(optim.Optimizer):
                 if p.grad is None:
                     continue
                 d_p = p.grad.data
-                
-                # if momentum != 0:
-                #     param_state = self.state[p]
-                #     if 'momentum_buffer' not in param_state:
-                #         buf = param_state['momentum_buffer'] = torch.zeros_like(p.data)
-                #         buf.mul_(momentum).add_(d_p)
-                #     else:
-                #         buf = param_state['momentum_buffer']
-                #         buf.mul_(momentum).add_(1, d_p)
-                #     d_p.copy_(buf)
 
                 # if weight_decay != 0 and self.steps >= 10 * self.freq:
                 if weight_decay != 0:
                     d_p.add_(weight_decay, p.data)
+
+                if momentum != 0:
+                    param_state = self.state[p]
+                    if 'momentum_buffer' not in param_state:
+                        buf = param_state['momentum_buffer'] = torch.zeros_like(p.data)
+                        buf.mul_(momentum).add_(d_p)
+                    else:
+                        buf = param_state['momentum_buffer']
+                        buf.mul_(momentum).add_(1, d_p)
+                    d_p.copy_(buf)
 
                 p.data.add_(-group['lr'], d_p)
                 # print('d_p:', d_p.shape)
